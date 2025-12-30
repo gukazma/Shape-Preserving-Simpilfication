@@ -19,6 +19,7 @@ struct Vertex {
     // Shape preservation
     Index region = INVALID_INDEX;     // Region this vertex belongs to
     VertexType type = VertexType::PLANAR;
+    uint8_t regionCount = 0;          // Number of adjacent regions (for adaptive weight)
 
     // Topology
     Index halfEdge = INVALID_INDEX;   // One outgoing half-edge
@@ -26,9 +27,9 @@ struct Vertex {
     // State
     bool removed = false;
 
-    // Get weight based on vertex type
+    // Get weight based on adjacent region count (adaptive weight)
     double weight() const {
-        return getVertexWeight(type);
+        return getAdaptiveWeight(regionCount);
     }
 
     // Check if vertex is on boundary

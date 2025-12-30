@@ -1,6 +1,8 @@
 #include "sps/simplify/qem_simplifier.h"
 #include <cmath>
 #include <iostream>
+#include <iomanip>
+#include <chrono>
 #include <set>
 #include <unordered_set>
 #ifdef _OPENMP
@@ -82,6 +84,7 @@ void ConstraintManager::classifyVertices(Mesh& mesh, const std::vector<PlanarReg
     for (Vertex& v : mesh.vertices) {
         v.type = VertexType::PLANAR;
         v.region = INVALID_INDEX;
+        v.regionCount = 0;
     }
 
     std::vector<std::set<Index>> vertexRegions(mesh.vertices.size());
@@ -97,6 +100,7 @@ void ConstraintManager::classifyVertices(Mesh& mesh, const std::vector<PlanarReg
 
     for (size_t vi = 0; vi < mesh.vertices.size(); ++vi) {
         int count = static_cast<int>(vertexRegions[vi].size());
+        mesh.vertices[vi].regionCount = static_cast<uint8_t>(std::min(count, 255));
         if (count >= 3) mesh.vertices[vi].type = VertexType::CORNER;
         else if (count == 2) mesh.vertices[vi].type = VertexType::EDGE;
         else mesh.vertices[vi].type = VertexType::PLANAR;
@@ -165,29 +169,80 @@ void QEMSimplifier::simplify(Mesh& mesh, const std::vector<PlanarRegion>& region
         ? params.targetFaceCount
         : static_cast<int>(mesh.faceCount() * params.targetRatio);
 
-    if (params.verbose)
-        std::cout << "Simplifying: " << mesh.faceCount() << " -> " << targetCount << " faces\n";
+    int initialCount = static_cast<int>(mesh.faceCount());
+    int totalToRemove = initialCount - targetCount;
+
+    if (params.verbose) {
+        std::cout << "Simplifying: " << initialCount << " -> " << targetCount << " faces\n";
+        std::cout << "Need to remove: " << totalToRemove << " faces\n";
+    }
 
     int collapsed = 0;
+    int skippedVersion = 0, skippedRemoved = 0, skippedFlip = 0, skippedError = 0;
+
+    auto startTime = std::chrono::steady_clock::now();
+    auto lastReportTime = startTime;
+    int lastReportFaces = initialCount;
+
     while (static_cast<int>(mesh.faceCount()) > targetCount && !priorityQueue_.empty()) {
         EdgeCost ec = priorityQueue_.top();
         priorityQueue_.pop();
 
-        if (ec.version != edgeVersions_[ec.edgeIdx]) continue;
+        if (ec.version != edgeVersions_[ec.edgeIdx]) { skippedVersion++; continue; }
         Edge& edge = mesh.edges[ec.edgeIdx];
-        if (edge.removed) continue;
-        if (!constraintMgr_.isCollapseValid(mesh, edge, edge.optimalPos)) continue;
-        if (params.maxError > 0 && ec.cost > params.maxError) continue;
+        if (edge.removed) { skippedRemoved++; continue; }
+        if (!constraintMgr_.isCollapseValid(mesh, edge, edge.optimalPos)) { skippedFlip++; continue; }
+        if (params.maxError > 0 && ec.cost > params.maxError) { skippedError++; continue; }
 
         collapseEdge(mesh, ec.edgeIdx);
         collapsed++;
 
-        if (params.verbose && collapsed % 5000 == 0)
-            std::cout << "  Collapsed " << collapsed << " edges\n";
+        // Progress report every 1 second
+        if (params.verbose) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastReportTime).count();
+
+            if (elapsed >= 1000) {
+                int currentFaces = static_cast<int>(mesh.faceCount());
+                int removed = initialCount - currentFaces;
+                double progress = (totalToRemove > 0) ? (100.0 * removed / totalToRemove) : 100.0;
+
+                // Calculate speed (faces removed per second)
+                int facesRemovedSinceLastReport = lastReportFaces - currentFaces;
+                double speed = facesRemovedSinceLastReport * 1000.0 / elapsed;
+
+                // Estimate remaining time
+                int remaining = currentFaces - targetCount;
+                double etaSeconds = (speed > 0) ? (remaining / speed) : 0;
+
+                int etaMin = static_cast<int>(etaSeconds) / 60;
+                int etaSec = static_cast<int>(etaSeconds) % 60;
+
+                std::cout << "\r  Progress: " << std::fixed << std::setprecision(1) << progress << "% "
+                          << "| Faces: " << currentFaces << "/" << targetCount << " "
+                          << "| Speed: " << static_cast<int>(speed) << " f/s "
+                          << "| ETA: " << etaMin << "m " << etaSec << "s "
+                          << "| Queue: " << priorityQueue_.size()
+                          << "        " << std::flush;
+
+                lastReportTime = now;
+                lastReportFaces = currentFaces;
+            }
+        }
     }
 
-    if (params.verbose)
+    if (params.verbose) {
+        auto endTime = std::chrono::steady_clock::now();
+        auto totalMs = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+
+        std::cout << "\n  Completed in " << (totalMs / 1000.0) << "s\n";
+        std::cout << "  Collapsed: " << collapsed << " edges\n";
+        std::cout << "  Skipped - version: " << skippedVersion
+                  << ", removed: " << skippedRemoved
+                  << ", flip: " << skippedFlip
+                  << ", error: " << skippedError << "\n";
         std::cout << "  Final: " << mesh.faceCount() << " faces\n";
+    }
 }
 
 void QEMSimplifier::simplify(Mesh& mesh, const Params& params) {
@@ -198,22 +253,45 @@ void QEMSimplifier::simplify(Mesh& mesh, const Params& params) {
 }
 
 void QEMSimplifier::initialize(Mesh& mesh, const std::vector<PlanarRegion>& regions, const Params& params) {
+    auto t0 = std::chrono::steady_clock::now();
+
+    if (params.verbose) std::cout << "  [Init] Computing quadrics..." << std::flush;
     QuadricCalculator::initializeQuadrics(mesh);
-    if (params.useShapeConstraints && !regions.empty())
+    auto t1 = std::chrono::steady_clock::now();
+    if (params.verbose) std::cout << " done (" << std::chrono::duration<double>(t1-t0).count() << "s)\n";
+
+    if (params.useShapeConstraints && !regions.empty()) {
+        if (params.verbose) std::cout << "  [Init] Classifying vertices..." << std::flush;
         constraintMgr_.classifyVertices(mesh, regions);
+        auto t2 = std::chrono::steady_clock::now();
+        if (params.verbose) std::cout << " done (" << std::chrono::duration<double>(t2-t1).count() << "s)\n";
+        t1 = t2;
+    }
 
     if (mesh.edges.empty()) {
+        if (params.verbose) std::cout << "  [Init] Building half-edge structure..." << std::flush;
         mesh.buildHalfEdgeStructure();
+        auto t2 = std::chrono::steady_clock::now();
+        if (params.verbose) std::cout << " done (" << std::chrono::duration<double>(t2-t1).count() << "s)\n";
+
+        if (params.verbose) std::cout << "  [Init] Building edge list..." << std::flush;
         mesh.buildEdgeList();
+        auto t3 = std::chrono::steady_clock::now();
+        if (params.verbose) std::cout << " done (" << std::chrono::duration<double>(t3-t2).count() << "s)\n";
+        t1 = t3;
     }
 
     // Build adjacency lists for fast lookup
+    if (params.verbose) std::cout << "  [Init] Building adjacency..." << std::flush;
     mesh.buildAdjacency();
+    auto t4 = std::chrono::steady_clock::now();
+    if (params.verbose) std::cout << " done (" << std::chrono::duration<double>(t4-t1).count() << "s)\n";
 
     edgeVersions_.assign(mesh.edges.size(), 0);
     while (!priorityQueue_.empty()) priorityQueue_.pop();
 
     // Compute edge costs in parallel
+    if (params.verbose) std::cout << "  [Init] Computing edge costs (" << mesh.edges.size() << " edges)..." << std::flush;
     size_t numEdges = mesh.edges.size();
     #pragma omp parallel for
     for (int i = 0; i < static_cast<int>(numEdges); ++i) {
@@ -221,13 +299,21 @@ void QEMSimplifier::initialize(Mesh& mesh, const std::vector<PlanarRegion>& regi
         if (edge.removed) continue;
         edge.cost = computeEdgeCost(mesh, edge);
     }
+    auto t5 = std::chrono::steady_clock::now();
+    if (params.verbose) std::cout << " done (" << std::chrono::duration<double>(t5-t4).count() << "s)\n";
 
     // Insert into priority queue (sequential - not thread-safe)
+    if (params.verbose) std::cout << "  [Init] Building priority queue..." << std::flush;
     for (Index i = 0; i < static_cast<Index>(numEdges); ++i) {
         Edge& edge = mesh.edges[i];
         if (edge.removed) continue;
         priorityQueue_.push(EdgeCost{i, edge.cost, edgeVersions_[i]});
     }
+    auto t6 = std::chrono::steady_clock::now();
+    if (params.verbose) std::cout << " done (" << std::chrono::duration<double>(t6-t5).count() << "s)\n";
+
+    auto totalInit = std::chrono::duration<double>(t6-t0).count();
+    if (params.verbose) std::cout << "  [Init] Total init time: " << totalInit << "s\n";
 }
 
 double QEMSimplifier::computeEdgeCost(const Mesh& mesh, const Edge& edge) const {

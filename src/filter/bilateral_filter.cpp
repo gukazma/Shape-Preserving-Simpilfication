@@ -1,6 +1,7 @@
 #include "sps/filter/bilateral_filter.h"
 #include <cmath>
 #include <iostream>
+#include <chrono>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -16,16 +17,35 @@ void BilateralMeshFilter::filter(Mesh& mesh, const Params& params) {
 
     // Build adjacency for fast vertex-face lookup
     if (mesh.vertexFaces.empty()) {
+        if (params.verbose) std::cout << "  Building adjacency..." << std::flush;
+        auto t0 = std::chrono::steady_clock::now();
         mesh.buildAdjacency();
+        auto t1 = std::chrono::steady_clock::now();
+        if (params.verbose) std::cout << " done (" << std::chrono::duration<double>(t1-t0).count() << "s)\n";
     }
 
     for (int iter = 0; iter < params.maxIterations; ++iter) {
-        computeFaceNormals(mesh);
-        filterFaceNormals(mesh, params);
-        updateVertexPositions(mesh);
+        auto iterStart = std::chrono::steady_clock::now();
 
+        if (params.verbose) std::cout << "  Iter " << (iter + 1) << ": computing normals..." << std::flush;
+        auto t0 = std::chrono::steady_clock::now();
+        computeFaceNormals(mesh);
+        auto t1 = std::chrono::steady_clock::now();
+        if (params.verbose) std::cout << " (" << std::chrono::duration<double>(t1-t0).count() << "s)";
+
+        if (params.verbose) std::cout << " filtering..." << std::flush;
+        filterFaceNormals(mesh, params);
+        auto t2 = std::chrono::steady_clock::now();
+        if (params.verbose) std::cout << " (" << std::chrono::duration<double>(t2-t1).count() << "s)";
+
+        if (params.verbose) std::cout << " updating vertices..." << std::flush;
+        updateVertexPositions(mesh);
+        auto t3 = std::chrono::steady_clock::now();
+        if (params.verbose) std::cout << " (" << std::chrono::duration<double>(t3-t2).count() << "s)";
+
+        auto iterEnd = std::chrono::steady_clock::now();
         if (params.verbose)
-            std::cout << "  Iteration " << (iter + 1) << " done\n";
+            std::cout << " total: " << std::chrono::duration<double>(iterEnd - iterStart).count() << "s\n";
     }
 }
 

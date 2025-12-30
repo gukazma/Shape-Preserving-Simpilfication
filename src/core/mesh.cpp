@@ -2,6 +2,7 @@
 #include <iostream>
 #include <algorithm>
 #include <map>
+#include <unordered_set>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -183,16 +184,52 @@ std::vector<Index> Mesh::getVertexNeighbors(Index) const { return {}; }
 std::vector<Index> Mesh::getFaceNeighbors(Index faceIdx) const {
     std::vector<Index> result;
     if (faceIdx < 0 || faceIdx >= static_cast<Index>(faces.size())) return result;
-    // Simple O(n) implementation for now
+
     const Face& f = faces[faceIdx];
-    for (Index i = 0; i < static_cast<Index>(faces.size()); ++i) {
-        if (i == faceIdx || faces[i].removed) continue;
-        int shared = 0;
-        for (int a = 0; a < 3; ++a)
-            for (int b = 0; b < 3; ++b)
-                if (f.vertices[a] == faces[i].vertices[b]) shared++;
-        if (shared >= 2) result.push_back(i);
+
+    // Use adjacency list if available - O(degree) instead of O(n)
+    if (!vertexFaces.empty()) {
+        std::unordered_set<Index> candidates;
+
+        // Get all faces that share at least one vertex with this face
+        for (int i = 0; i < 3; ++i) {
+            Index vi = f.vertices[i];
+            if (vi < static_cast<Index>(vertexFaces.size())) {
+                for (Index fi : vertexFaces[vi]) {
+                    if (fi != faceIdx && !faces[fi].removed) {
+                        candidates.insert(fi);
+                    }
+                }
+            }
+        }
+
+        // Check which candidates share at least 2 vertices (an edge)
+        for (Index fi : candidates) {
+            int shared = 0;
+            const Face& other = faces[fi];
+            for (int a = 0; a < 3; ++a) {
+                for (int b = 0; b < 3; ++b) {
+                    if (f.vertices[a] == other.vertices[b]) {
+                        shared++;
+                    }
+                }
+            }
+            if (shared >= 2) {
+                result.push_back(fi);
+            }
+        }
+    } else {
+        // Fallback: O(n) implementation if adjacency not built
+        for (Index i = 0; i < static_cast<Index>(faces.size()); ++i) {
+            if (i == faceIdx || faces[i].removed) continue;
+            int shared = 0;
+            for (int a = 0; a < 3; ++a)
+                for (int b = 0; b < 3; ++b)
+                    if (f.vertices[a] == faces[i].vertices[b]) shared++;
+            if (shared >= 2) result.push_back(i);
+        }
     }
+
     return result;
 }
 

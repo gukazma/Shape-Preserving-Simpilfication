@@ -5,6 +5,7 @@
 #include <vector>
 #include <array>
 #include <cstdint>
+#include <cmath>
 #include <limits>
 
 namespace sps {
@@ -29,7 +30,7 @@ enum class VertexType : uint8_t {
     CORNER = 2    // V3: belongs to three or more regions (weight: 100)
 };
 
-// Get weight for vertex type
+// Get weight for vertex type (legacy fixed weights)
 inline double getVertexWeight(VertexType type) {
     switch (type) {
         case VertexType::PLANAR: return 1.0;
@@ -37,6 +38,15 @@ inline double getVertexWeight(VertexType type) {
         case VertexType::CORNER: return 100.0;
         default: return 1.0;
     }
+}
+
+// Get adaptive weight based on adjacent region count
+// Uses logarithmic scaling to avoid over-constraining large models
+// weight = 1 + log2(regionCount) for regionCount >= 1
+// This gives: 1 region -> 1.0, 2 regions -> 2.0, 3 regions -> 2.58, 4 regions -> 3.0
+inline double getAdaptiveWeight(int regionCount) {
+    if (regionCount <= 1) return 1.0;
+    return 1.0 + std::log2(static_cast<double>(regionCount));
 }
 
 // Bounding box

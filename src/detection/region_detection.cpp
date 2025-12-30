@@ -118,21 +118,24 @@ void RegionOptimizer::optimize(Mesh& mesh, std::vector<PlanarRegion>& regions, c
 }
 
 void RegionOptimizer::handleUngroupedFaces(Mesh& mesh, std::vector<PlanarRegion>& regions) {
+    // Build face -> region mapping for O(1) lookup
+    std::vector<Index> faceToRegion(mesh.faces.size(), INVALID_INDEX);
+    for (size_t ri = 0; ri < regions.size(); ++ri) {
+        if (regions[ri].removed) continue;
+        for (Index fi : regions[ri].faces) {
+            faceToRegion[fi] = static_cast<Index>(ri);
+        }
+    }
+
+    // Now check ungrouped faces - O(F) instead of O(F * R * region_size)
     for (Index fi = 0; fi < static_cast<Index>(mesh.faces.size()); ++fi) {
         if (mesh.faces[fi].removed) continue;
 
-        bool found = false;
-        for (const auto& region : regions) {
-            for (Index rfi : region.faces) {
-                if (rfi == fi) { found = true; break; }
-            }
-            if (found) break;
-        }
-
-        if (!found && !regions.empty()) {
+        if (faceToRegion[fi] == INVALID_INDEX && !regions.empty()) {
             Index bestRegion = findBestRegion(mesh, fi, regions);
             if (bestRegion != INVALID_INDEX) {
                 regions[bestRegion].faces.push_back(fi);
+                faceToRegion[fi] = bestRegion;
             }
         }
     }
