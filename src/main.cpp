@@ -1,6 +1,7 @@
 #include "sps/core/mesh.h"
 #include "sps/io/mesh_io.h"
 #include "sps/simplify/qem_simplifier.h"
+#include "sps/simplify/texture_transfer.h"
 #include <iostream>
 #include <string>
 #include <chrono>
@@ -109,8 +110,16 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    // ========== Initialize texture transfer ==========
+    TextureTransfer textureTransfer;
+    bool hasTextures = mesh.hasTexcoords();
+    if (hasTextures) {
+        std::cout << "\n[2/4] Initializing texture transfer...\n";
+        textureTransfer.initialize(mesh);
+    }
+
     // ========== Simplify ==========
-    std::cout << "\n[2/3] Simplifying mesh...\n";
+    std::cout << "\n[" << (hasTextures ? "3/4" : "2/3") << "] Simplifying mesh...\n";
     auto simplifyStart = std::chrono::steady_clock::now();
 
     int edgesRemoved = CGALSimplifier::simplify(mesh, params);
@@ -120,6 +129,19 @@ int main(int argc, char* argv[]) {
 
     std::cout << "  Edges collapsed: " << edgesRemoved << "\n";
     std::cout << "  Simplification time: " << formatDuration(simplifyTime) << "\n";
+
+    // ========== Transfer texture coordinates ==========
+    double transferTime = 0;
+    if (hasTextures && textureTransfer.isInitialized()) {
+        std::cout << "\n[4/4] Transferring texture coordinates...\n";
+        auto transferStart = std::chrono::steady_clock::now();
+
+        textureTransfer.transfer(mesh);
+
+        auto transferEnd = std::chrono::steady_clock::now();
+        transferTime = std::chrono::duration<double>(transferEnd - transferStart).count();
+        std::cout << "  Transfer time: " << formatDuration(transferTime) << "\n";
+    }
 
     // ========== Save result ==========
     std::cout << "\n[3/3] Saving result: " << outputFile << "\n";
@@ -134,7 +156,7 @@ int main(int argc, char* argv[]) {
     double saveTime = std::chrono::duration<double>(saveEnd - saveStart).count();
 
     // ========== Summary ==========
-    double totalTime = loadTime + simplifyTime + saveTime;
+    double totalTime = loadTime + simplifyTime + transferTime + saveTime;
 
     std::cout << "\n========== Summary ==========\n";
     std::cout << "  Input:  " << inputFile << "\n";
@@ -144,6 +166,9 @@ int main(int argc, char* argv[]) {
     std::cout << "  Total time: " << formatDuration(totalTime) << "\n";
     std::cout << "    - Load:     " << formatDuration(loadTime) << "\n";
     std::cout << "    - Simplify: " << formatDuration(simplifyTime) << "\n";
+    if (hasTextures) {
+        std::cout << "    - UV Transfer: " << formatDuration(transferTime) << "\n";
+    }
     std::cout << "    - Save:     " << formatDuration(saveTime) << "\n";
     std::cout << "Done!\n";
 
