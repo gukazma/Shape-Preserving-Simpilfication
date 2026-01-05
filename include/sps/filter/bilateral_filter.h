@@ -4,7 +4,12 @@
 
 namespace sps {
 
-// Bilateral Mesh Filter - Makes planes flatter while preserving sharp edges
+/**
+ * Bilateral Mesh Filter - Makes planes flatter while preserving sharp edges
+ *
+ * TODO: This module needs to be updated to work with CGAL Surface_mesh.
+ * Currently provides placeholder implementation.
+ */
 class BilateralMeshFilter {
 public:
     struct Params {
@@ -15,18 +20,22 @@ public:
         bool verbose = false;
     };
 
-    void filter(Mesh& mesh, const Params& params = Params());
-
-private:
-    void computeFaceNormals(Mesh& mesh);
-    void filterFaceNormals(Mesh& mesh, const Params& params);
-    void updateVertexPositions(Mesh& mesh);
-    double computeSpatialWeight(const Vector3d& ci, const Vector3d& cj, double sigma) const;
-    double computeNormalWeight(const Vector3d& ni, const Vector3d& nj, double angleThreshold) const;
-    std::vector<Index> getAdaptiveNeighborhood(const Mesh& mesh, Index faceIdx, double angleThreshold) const;
-    double computeAverageEdgeLength(const Mesh& mesh) const;
-
-    std::vector<Vector3d> filteredNormals_;
+    /**
+     * Apply bilateral filtering to smooth the mesh while preserving edges
+     * @param mesh The mesh to filter
+     * @param params Filter parameters
+     */
+    void filter(Mesh& mesh, const Params& params = Params()) {
+        // TODO: Implement bilateral filtering for CGAL Surface_mesh
+        // For now, just compute face normals
+        if (params.verbose) {
+            std::cout << "BilateralMeshFilter: Computing face normals...\n";
+        }
+        mesh.computeFaceNormals();
+        if (params.verbose) {
+            std::cout << "BilateralMeshFilter: Done.\n";
+        }
+    }
 };
 
 } // namespace sps

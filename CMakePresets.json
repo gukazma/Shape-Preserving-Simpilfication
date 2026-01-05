@@ -1,0 +1,99 @@
+{
+    "version": 8,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 20,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "vcpkg-base",
+            "hidden": true,
+            "cacheVariables": {
+                "CMAKE_TOOLCHAIN_FILE": {
+                    "type": "FILEPATH",
+                    "value": "$env{VCPKG_DIR}/scripts/buildsystems/vcpkg.cmake"
+                },
+                "VCPKG_TARGET_TRIPLET": "x64-windows"
+            }
+        },
+        {
+            "name": "vs2022-x64",
+            "displayName": "Visual Studio Community 2022 Release - amd64",
+            "description": "Using compilers for Visual Studio 17 2022 (x64 architecture)",
+            "inherits": "vcpkg-base",
+            "generator": "Visual Studio 17 2022",
+            "toolset": "host=x64",
+            "architecture": "x64",
+            "binaryDir": "${sourceDir}/Builds/${presetName}",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/Builds/install/${presetName}"
+            }
+        },
+        {
+            "name": "ninja-multi",
+            "displayName": "Ninja Multi-Config",
+            "description": "Configure and generate Ninja project files for all configurations",
+            "inherits": "vcpkg-base",
+            "binaryDir": "${sourceDir}/Builds/${presetName}",
+            "generator": "Ninja Multi-Config",
+            "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/Builds/install/${presetName}",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "vs2022-x64-debug",
+            "displayName": "Visual Studio Community 2022 Release - amd64 - Debug",
+            "configurePreset": "vs2022-x64",
+            "configuration": "Debug"
+        },
+        {
+            "name": "vs2022-x64-release",
+            "displayName": "Visual Studio Community 2022 Release - amd64 - Release",
+            "configurePreset": "vs2022-x64",
+            "configuration": "Release"
+        },
+        {
+            "name": "ninja-debug",
+            "configurePreset": "ninja-multi",
+            "displayName": "Build (Debug)",
+            "description": "Build with Ninja (Debug)",
+            "configuration": "Debug"
+        },
+        {
+            "name": "ninja-release",
+            "configurePreset": "ninja-multi",
+            "displayName": "Build (Release)",
+            "description": "Build with Ninja (Release)",
+            "configuration": "Release"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "test-vs2022-x64",
+            "configurePreset": "vs2022-x64",
+            "hidden": true
+        },
+        {
+            "name": "test-vs2022-x64-debug",
+            "description": "Test VS2022-x64 (Debug)",
+            "displayName": "Test VS2022-x64 (Debug)",
+            "configuration": "Debug",
+            "inherits": [
+                "test-vs2022-x64"
+            ]
+        },
+        {
+            "name": "test-vs2022-x64-release",
+            "description": "Test VS2022-x64 (Release)",
+            "displayName": "Test VS2022-x64 (Release)",
+            "configuration": "Release",
+            "inherits": [
+                "test-vs2022-x64"
+            ]
+        }
+    ]
+}

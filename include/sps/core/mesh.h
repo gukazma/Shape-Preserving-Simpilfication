@@ -1,144 +1,236 @@
 #pragma once
 
 #include "sps/core/types.h"
-#include "sps/core/vertex.h"
-#include "sps/core/face.h"
-#include "sps/core/half_edge.h"
-#include "sps/core/region.h"
-
-#include <vector>
-#include <unordered_map>
-#include <functional>
+#include <iostream>
+#include <set>
+#include <map>
 
 namespace sps {
 
 /**
- * Triangle mesh with half-edge data structure
- * Supports shape-preserving simplification for urban buildings
+ * Mesh class wrapping CGAL::Surface_mesh with additional functionality
+ * for shape-preserving simplification
  */
 class Mesh {
 public:
-    // Data
-    std::vector<Vertex> vertices;
-    std::vector<Face> faces;
-    std::vector<HalfEdge> halfEdges;
-    std::vector<Edge> edges;
+    // The underlying CGAL mesh
+    CGALMesh cgal_mesh;
+
+    // Planar regions for shape-preserving simplification
     std::vector<PlanarRegion> regions;
-
-    // Adjacency lists for fast lookup
-    std::vector<std::vector<Index>> vertexFaces;   // vertex -> adjacent faces
-    std::vector<std::vector<Index>> vertexEdges;   // vertex -> incident edges
-
-    // Cached counts for O(1) lookup during simplification
-    mutable size_t cachedFaceCount_ = 0;
-    mutable bool faceCountDirty_ = true;
-
-    // Separate texture coordinates and normals (for OBJ format)
-    std::vector<Vector2d> texCoords;
-    std::vector<Vector3d> normals;
 
     // Properties
     BoundingBox boundingBox;
     std::string name;
+    std::string mtlFile;  // Material file path (for OBJ textures)
+
+    // Property maps for vertex attributes (stored as mesh properties)
+    using VertexTypeMap = CGALMesh::Property_map<vertex_descriptor, VertexType>;
+    using VertexRegionMap = CGALMesh::Property_map<vertex_descriptor, Index>;
+    using VertexRegionCountMap = CGALMesh::Property_map<vertex_descriptor, int>;
+    using FaceRegionMap = CGALMesh::Property_map<face_descriptor, Index>;
+    using FaceNormalMap = CGALMesh::Property_map<face_descriptor, Vector_3>;
+    using EdgeConstraintMap = CGALMesh::Property_map<edge_descriptor, bool>;
+    using HalfedgeTexcoordMap = CGALMesh::Property_map<halfedge_descriptor, Point_2>;
 
 public:
     Mesh() = default;
 
-    // ==================== Basic Operations ====================
+    // Initialize property maps (call after loading mesh)
+    void initPropertyMaps() {
+        // Vertex properties
+        auto [vtype, vtype_created] = cgal_mesh.add_property_map<vertex_descriptor, VertexType>(
+            "v:type", VertexType::PLANAR);
+        vertexTypeMap_ = vtype;
 
-    // Add geometry
-    Index addVertex(const Vector3d& position);
-    Index addFace(Index v0, Index v1, Index v2);
+        auto [vregion, vregion_created] = cgal_mesh.add_property_map<vertex_descriptor, Index>(
+            "v:region", INVALID_INDEX);
+        vertexRegionMap_ = vregion;
 
-    // Count (excluding removed)
-    size_t vertexCount() const;
-    size_t faceCount() const;
-    size_t edgeCount() const;
+        auto [vcount, vcount_created] = cgal_mesh.add_property_map<vertex_descriptor, int>(
+            "v:region_count", 0);
+        vertexRegionCountMap_ = vcount;
 
-    // Invalidate cached counts (call after modifying faces)
-    void invalidateFaceCount() { faceCountDirty_ = true; }
+        // Face properties
+        auto [fregion, fregion_created] = cgal_mesh.add_property_map<face_descriptor, Index>(
+            "f:region", INVALID_INDEX);
+        faceRegionMap_ = fregion;
 
-    // Decrement face count directly (for fast simplification)
-    void decrementFaceCount(size_t n = 1) {
-        if (!faceCountDirty_) cachedFaceCount_ -= n;
+        auto [fnormal, fnormal_created] = cgal_mesh.add_property_map<face_descriptor, Vector_3>(
+            "f:normal", Vector_3(0, 0, 1));
+        faceNormalMap_ = fnormal;
+
+        // Edge properties
+        auto [econstraint, econstraint_created] = cgal_mesh.add_property_map<edge_descriptor, bool>(
+            "e:constrained", false);
+        edgeConstraintMap_ = econstraint;
     }
 
-    // ==================== Topology Building ====================
+    // Initialize texture coordinate property map
+    void initTexcoordMap() {
+        auto [htexcoord, htexcoord_created] = cgal_mesh.add_property_map<halfedge_descriptor, Point_2>(
+            "h:texcoord", Point_2(0, 0));
+        halfedgeTexcoordMap_ = htexcoord;
+        hasTexcoords_ = true;
+    }
 
-    // Build half-edge structure from faces
-    void buildHalfEdgeStructure();
+    // ==================== Basic Operations ====================
 
-    // Build edge list from half-edges
-    void buildEdgeList();
+    // Add a vertex
+    vertex_descriptor addVertex(const Point_3& point) {
+        return cgal_mesh.add_vertex(point);
+    }
 
-    // Build adjacency lists (call after buildEdgeList)
-    void buildAdjacency();
+    vertex_descriptor addVertex(const Vector3d& position) {
+        return cgal_mesh.add_vertex(to_cgal_point(position));
+    }
+
+    // Add a face
+    face_descriptor addFace(vertex_descriptor v0, vertex_descriptor v1, vertex_descriptor v2) {
+        return cgal_mesh.add_face(v0, v1, v2);
+    }
+
+    // Count elements
+    size_t vertexCount() const { return cgal_mesh.number_of_vertices(); }
+    size_t faceCount() const { return cgal_mesh.number_of_faces(); }
+    size_t edgeCount() const { return cgal_mesh.number_of_edges(); }
+    size_t halfedgeCount() const { return cgal_mesh.number_of_halfedges(); }
+
+    // ==================== Property Access ====================
+
+    // Vertex type (PLANAR, EDGE, CORNER)
+    VertexType& vertexType(vertex_descriptor v) { return vertexTypeMap_[v]; }
+    VertexType vertexType(vertex_descriptor v) const { return vertexTypeMap_[v]; }
+
+    // Vertex region
+    Index& vertexRegion(vertex_descriptor v) { return vertexRegionMap_[v]; }
+    Index vertexRegion(vertex_descriptor v) const { return vertexRegionMap_[v]; }
+
+    // Vertex region count
+    int& vertexRegionCount(vertex_descriptor v) { return vertexRegionCountMap_[v]; }
+    int vertexRegionCount(vertex_descriptor v) const { return vertexRegionCountMap_[v]; }
+
+    // Face region
+    Index& faceRegion(face_descriptor f) { return faceRegionMap_[f]; }
+    Index faceRegion(face_descriptor f) const { return faceRegionMap_[f]; }
+
+    // Face normal
+    Vector_3& faceNormal(face_descriptor f) { return faceNormalMap_[f]; }
+    Vector_3 faceNormal(face_descriptor f) const { return faceNormalMap_[f]; }
+
+    // Edge constraint
+    void setEdgeConstrained(edge_descriptor e, bool constrained) { edgeConstraintMap_[e] = constrained; }
+    bool edgeConstrained(edge_descriptor e) const { return edgeConstraintMap_[e]; }
+
+    // Texture coordinates (per halfedge)
+    bool hasTexcoords() const { return hasTexcoords_; }
+    Point_2& texcoord(halfedge_descriptor h) { return halfedgeTexcoordMap_[h]; }
+    Point_2 texcoord(halfedge_descriptor h) const { return halfedgeTexcoordMap_[h]; }
+    void setTexcoord(halfedge_descriptor h, const Point_2& uv) { halfedgeTexcoordMap_[h] = uv; }
+    HalfedgeTexcoordMap& getTexcoordMap() { return halfedgeTexcoordMap_; }
+
+    // Get vertex weight based on region count
+    double vertexWeight(vertex_descriptor v) const {
+        return getAdaptiveWeight(vertexRegionCountMap_[v]);
+    }
+
+    // Get point position
+    Point_3& point(vertex_descriptor v) { return cgal_mesh.point(v); }
+    const Point_3& point(vertex_descriptor v) const { return cgal_mesh.point(v); }
 
     // ==================== Geometry Computation ====================
 
-    // Compute all face normals and areas
-    void computeFaceNormals();
+    // Compute all face normals
+    void computeFaceNormals() {
+        for (face_descriptor f : cgal_mesh.faces()) {
+            halfedge_descriptor h = cgal_mesh.halfedge(f);
+            Point_3 p0 = cgal_mesh.point(cgal_mesh.target(h));
+            Point_3 p1 = cgal_mesh.point(cgal_mesh.target(cgal_mesh.next(h)));
+            Point_3 p2 = cgal_mesh.point(cgal_mesh.target(cgal_mesh.next(cgal_mesh.next(h))));
 
-    // Compute vertex normals (area-weighted average of adjacent faces)
-    void computeVertexNormals();
+            Vector_3 v1 = p1 - p0;
+            Vector_3 v2 = p2 - p0;
+            Vector_3 normal = CGAL::cross_product(v1, v2);
+
+            double len = std::sqrt(CGAL::to_double(normal.squared_length()));
+            if (len > 1e-10) {
+                normal = normal / len;
+            }
+            faceNormalMap_[f] = normal;
+        }
+    }
 
     // Compute bounding box
-    void computeBoundingBox();
-
-    // Compute face centroid
-    static Vector3d computeCentroid(const Vector3d& v0, const Vector3d& v1, const Vector3d& v2);
-
-    // Compute face normal (unnormalized, magnitude = 2*area)
-    static Vector3d computeFaceNormal(const Vector3d& v0, const Vector3d& v1, const Vector3d& v2);
+    void computeBoundingBox() {
+        boundingBox = BoundingBox();
+        for (vertex_descriptor v : cgal_mesh.vertices()) {
+            boundingBox.expand(cgal_mesh.point(v));
+        }
+    }
 
     // Compute face area
-    static double computeFaceArea(const Vector3d& v0, const Vector3d& v1, const Vector3d& v2);
-
-    // ==================== Adjacency Queries ====================
-
-    // Get faces adjacent to a vertex
-    std::vector<Index> getVertexFaces(Index vertexIdx) const;
-
-    // Get vertices adjacent to a vertex (1-ring neighborhood)
-    std::vector<Index> getVertexNeighbors(Index vertexIdx) const;
-
-    // Get faces adjacent to a face (sharing an edge)
-    std::vector<Index> getFaceNeighbors(Index faceIdx) const;
-
-    // Get edges incident to a vertex
-    std::vector<Index> getVertexEdges(Index vertexIdx) const;
+    static double computeFaceArea(const Point_3& p0, const Point_3& p1, const Point_3& p2) {
+        Vector_3 v1 = p1 - p0;
+        Vector_3 v2 = p2 - p0;
+        Vector_3 cross = CGAL::cross_product(v1, v2);
+        return 0.5 * std::sqrt(CGAL::to_double(cross.squared_length()));
+    }
 
     // ==================== Validation ====================
 
-    // Check mesh integrity
-    bool isValid() const;
+    bool isValid() const {
+        return cgal_mesh.is_valid();
+    }
 
-    // Check if mesh is manifold
-    bool isManifold() const;
-
-    // Check for degenerate faces
-    bool hasDegenrateFaces() const;
+    bool isTriangleMesh() const {
+        return CGAL::is_triangle_mesh(cgal_mesh);
+    }
 
     // ==================== Utility ====================
 
-    // Compact mesh (remove deleted elements)
-    void compact();
+    void clear() {
+        cgal_mesh.clear();
+        regions.clear();
+        boundingBox = BoundingBox();
+        name.clear();
+        mtlFile.clear();
+        hasTexcoords_ = false;
+    }
 
-    // Clear all data
-    void clear();
+    void printStats() const {
+        std::cout << "Mesh Statistics:\n"
+                  << "  Name: " << (name.empty() ? "(unnamed)" : name) << "\n"
+                  << "  Vertices: " << vertexCount() << "\n"
+                  << "  Faces: " << faceCount() << "\n"
+                  << "  Edges: " << edgeCount() << "\n"
+                  << "  Halfedges: " << halfedgeCount() << "\n"
+                  << "  Regions: " << regions.size() << "\n"
+                  << "  Valid: " << (isValid() ? "yes" : "no") << "\n"
+                  << "  Triangle mesh: " << (isTriangleMesh() ? "yes" : "no") << "\n";
 
-    // Get mesh statistics
-    void printStats() const;
+        if (boundingBox.isValid()) {
+            std::cout << "  Bounding box: ["
+                      << boundingBox.min.transpose() << "] - ["
+                      << boundingBox.max.transpose() << "]\n"
+                      << "  Diagonal: " << boundingBox.diagonal() << "\n";
+        }
+    }
+
+    // ==================== Edge Constraint Map Access ====================
+
+    EdgeConstraintMap& getEdgeConstraintMap() { return edgeConstraintMap_; }
+    const EdgeConstraintMap& getEdgeConstraintMap() const { return edgeConstraintMap_; }
 
 private:
-    // Edge hash for building half-edge structure
-    struct EdgeHash {
-        size_t operator()(const std::pair<Index, Index>& e) const {
-            return std::hash<Index>()(e.first) ^ (std::hash<Index>()(e.second) << 16);
-        }
-    };
-
-    using EdgeMap = std::unordered_map<std::pair<Index, Index>, Index, EdgeHash>;
+    // Property maps
+    VertexTypeMap vertexTypeMap_;
+    VertexRegionMap vertexRegionMap_;
+    VertexRegionCountMap vertexRegionCountMap_;
+    FaceRegionMap faceRegionMap_;
+    FaceNormalMap faceNormalMap_;
+    EdgeConstraintMap edgeConstraintMap_;
+    HalfedgeTexcoordMap halfedgeTexcoordMap_;
+    bool hasTexcoords_ = false;
 };
 
 } // namespace sps
