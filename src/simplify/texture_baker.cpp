@@ -265,7 +265,7 @@ bool TextureBaker::generateUVsWithXatlas(Mesh& mesh, int targetSize, int& atlasW
 
     xatlas::PackOptions packOptions;
     packOptions.resolution = targetSize;
-    packOptions.padding = 2;
+    packOptions.padding = 8;  // Increased padding to reduce seam artifacts
     packOptions.bilinear = true;
     packOptions.blockAlign = true;
 
@@ -559,6 +559,76 @@ void TextureBaker::rasterizeTriangle(
     }
 }
 
+void TextureBaker::dilateTexture(std::vector<unsigned char>& texture, int width, int height, int iterations) {
+    // Create a mask to track which pixels are filled
+    std::vector<bool> filled(width * height, false);
+
+    // Mark initially filled pixels (non-black)
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int idx = (y * width + x) * 3;
+            if (texture[idx] != 0 || texture[idx + 1] != 0 || texture[idx + 2] != 0) {
+                filled[y * width + x] = true;
+            }
+        }
+    }
+
+    // 8-connected neighbor offsets
+    const int dx[] = {-1, 0, 1, -1, 1, -1, 0, 1};
+    const int dy[] = {-1, -1, -1, 0, 0, 1, 1, 1};
+
+    std::vector<unsigned char> tempTexture = texture;
+
+    for (int iter = 0; iter < iterations; ++iter) {
+        std::vector<bool> newFilled = filled;
+        bool changed = false;
+
+        for (int y = 0; y < height; ++y) {
+            for (int x = 0; x < width; ++x) {
+                int pixelIdx = y * width + x;
+
+                // Skip already filled pixels
+                if (filled[pixelIdx]) continue;
+
+                // Collect colors from filled neighbors
+                int sumR = 0, sumG = 0, sumB = 0;
+                int count = 0;
+
+                for (int n = 0; n < 8; ++n) {
+                    int nx = x + dx[n];
+                    int ny = y + dy[n];
+
+                    if (nx >= 0 && nx < width && ny >= 0 && ny < height) {
+                        int neighborIdx = ny * width + nx;
+                        if (filled[neighborIdx]) {
+                            int texIdx = neighborIdx * 3;
+                            sumR += tempTexture[texIdx + 0];
+                            sumG += tempTexture[texIdx + 1];
+                            sumB += tempTexture[texIdx + 2];
+                            count++;
+                        }
+                    }
+                }
+
+                // If we have filled neighbors, fill this pixel with average
+                if (count > 0) {
+                    int texIdx = pixelIdx * 3;
+                    texture[texIdx + 0] = static_cast<unsigned char>(sumR / count);
+                    texture[texIdx + 1] = static_cast<unsigned char>(sumG / count);
+                    texture[texIdx + 2] = static_cast<unsigned char>(sumB / count);
+                    newFilled[pixelIdx] = true;
+                    changed = true;
+                }
+            }
+        }
+
+        if (!changed) break;  // No more pixels to fill
+
+        filled = newFilled;
+        tempTexture = texture;
+    }
+}
+
 // Structure to hold pixel work item for parallel processing
 struct PixelWorkItem {
     int x, y;           // Output pixel coordinates
@@ -787,7 +857,11 @@ bool TextureBaker::bake(Mesh& simplifiedMesh, const std::string& outputTexturePa
 
     std::cout << "\r  Progress: " << totalPixels << "/" << totalPixels << " pixels - Done    \n";
 
-    // Step 6: Save output texture
+    // Step 6: Dilate texture to fill seam gaps
+    std::cout << "TextureBaker: Dilating texture to fill seam gaps...\n";
+    dilateTexture(outputTexture, atlasWidth, atlasHeight, 16);
+
+    // Step 7: Save output texture
     int result = 0;
     std::string ext = outputTexturePath.substr(outputTexturePath.rfind('.') + 1);
     std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
@@ -795,7 +869,7 @@ bool TextureBaker::bake(Mesh& simplifiedMesh, const std::string& outputTexturePa
     if (ext == "png") {
         result = stbi_write_png(outputTexturePath.c_str(), atlasWidth, atlasHeight, 3, outputTexture.data(), atlasWidth * 3);
     } else if (ext == "jpg" || ext == "jpeg") {
-        result = stbi_write_jpg(outputTexturePath.c_str(), atlasWidth, atlasHeight, 3, outputTexture.data(), 90);
+        result = stbi_write_jpg(outputTexturePath.c_str(), atlasWidth, atlasHeight, 3, outputTexture.data(), 75);
     } else {
         result = stbi_write_png(outputTexturePath.c_str(), atlasWidth, atlasHeight, 3, outputTexture.data(), atlasWidth * 3);
     }
