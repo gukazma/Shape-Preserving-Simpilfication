@@ -131,6 +131,17 @@ private:
         std::vector<unsigned char>& outputTexture,
         int textureWidth, int textureHeight);
 
+    /**
+     * Dilate texture to fill empty pixels near edges (reduces black seam artifacts)
+     * @param texture RGB texture data
+     * @param width Texture width
+     * @param height Texture height
+     * @param iterations Number of dilation iterations
+     */
+    static void dilateTexture(
+        std::vector<unsigned char>& texture,
+        int width, int height, int iterations = 8);
+
     // Original mesh data
     CGALMesh originalMesh_;
     AABB_tree tree_;

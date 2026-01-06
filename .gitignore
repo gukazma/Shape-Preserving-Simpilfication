@@ -32,3 +32,5 @@ data/output/
 *.tmp
 *.log
 Builds
+.cache
+.serena
