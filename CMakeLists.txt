@@ -47,9 +47,11 @@ option(SPS_USE_OPENMP "Use OpenMP for parallelization" ON)
 find_package(Boost REQUIRED)
 find_package(Eigen3 3.3 REQUIRED)
 find_package(CGAL REQUIRED)
+find_package(Stb REQUIRED)
 
 message(STATUS "Eigen3 found: ${EIGEN3_VERSION}")
 message(STATUS "CGAL found: ${CGAL_VERSION}")
+message(STATUS "Stb found")
 
 # OpenMP (optional)
 if(SPS_USE_OPENMP)
@@ -64,6 +66,7 @@ endif()
 # =============================================================================
 include_directories(${CMAKE_SOURCE_DIR}/include)
 include_directories(${CMAKE_SOURCE_DIR}/third_party)
+include_directories(${Stb_INCLUDE_DIR})
 
 # =============================================================================
 # Collect source files
@@ -74,12 +77,16 @@ file(GLOB_RECURSE DETECTION_SOURCES "src/detection/*.cpp")
 file(GLOB_RECURSE SIMPLIFY_SOURCES "src/simplify/*.cpp")
 file(GLOB_RECURSE IO_SOURCES "src/io/*.cpp")
 
+# Third-party sources
+set(XATLAS_SOURCES "${CMAKE_SOURCE_DIR}/third_party/xatlas/xatlas.cpp")
+
 set(LIB_SOURCES
     ${CORE_SOURCES}
     ${FILTER_SOURCES}
     ${DETECTION_SOURCES}
     ${SIMPLIFY_SOURCES}
     ${IO_SOURCES}
+    ${XATLAS_SOURCES}
 )
 
 # =============================================================================

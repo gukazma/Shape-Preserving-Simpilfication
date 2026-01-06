@@ -122,7 +122,11 @@ bool MeshIO::loadOBJ(const std::string& filename, Mesh& mesh) {
     std::vector<Point_2> texcoords;
     std::vector<std::array<int, 3>> faceVertexIndices;
     std::vector<std::array<int, 3>> faceTexcoordIndices;
+    std::vector<int> faceMaterialIndices;  // Material index per face
+    std::vector<std::string> materialNames;  // List of material names
+    std::map<std::string, int> materialNameToIndex;  // Map name to index
     std::string mtlFile;
+    int currentMaterial = 0;
 
     std::string line;
     while (std::getline(input, line)) {
@@ -141,6 +145,18 @@ bool MeshIO::loadOBJ(const std::string& filename, Mesh& mesh) {
             double u, v;
             iss >> u >> v;
             texcoords.emplace_back(u, v);
+        }
+        else if (prefix == "usemtl") {
+            std::string matName;
+            iss >> matName;
+            auto it = materialNameToIndex.find(matName);
+            if (it == materialNameToIndex.end()) {
+                currentMaterial = static_cast<int>(materialNames.size());
+                materialNames.push_back(matName);
+                materialNameToIndex[matName] = currentMaterial;
+            } else {
+                currentMaterial = it->second;
+            }
         }
         else if (prefix == "f") {
             std::array<int, 3> vIdx = {-1, -1, -1};
@@ -172,6 +188,7 @@ bool MeshIO::loadOBJ(const std::string& filename, Mesh& mesh) {
             if (vIdx[0] >= 0 && vIdx[1] >= 0 && vIdx[2] >= 0) {
                 faceVertexIndices.push_back(vIdx);
                 faceTexcoordIndices.push_back(vtIdx);
+                faceMaterialIndices.push_back(currentMaterial);
             }
         }
         else if (prefix == "mtllib") {
@@ -202,23 +219,38 @@ bool MeshIO::loadOBJ(const std::string& filename, Mesh& mesh) {
         mesh.initTexcoordMap();
     }
 
-    // Add faces and set texture coordinates
+    // Check if we have multiple materials
+    bool hasMaterials = materialNames.size() > 1;
+    if (hasMaterials) {
+        mesh.initMaterialMap();
+        mesh.setMaterialNames(materialNames);
+    }
+
+    // Add faces and set texture coordinates and materials
     for (size_t i = 0; i < faceVertexIndices.size(); ++i) {
         const auto& vIdx = faceVertexIndices[i];
         face_descriptor f = sm.add_face(vertexHandles[vIdx[0]],
                                          vertexHandles[vIdx[1]],
                                          vertexHandles[vIdx[2]]);
 
-        if (f != CGALMesh::null_face() && hasTexcoords) {
-            const auto& vtIdx = faceTexcoordIndices[i];
-            halfedge_descriptor h = sm.halfedge(f);
+        if (f != CGALMesh::null_face()) {
+            // Set texture coordinates
+            if (hasTexcoords) {
+                const auto& vtIdx = faceTexcoordIndices[i];
+                halfedge_descriptor h = sm.halfedge(f);
 
-            // Set texcoords for each halfedge of the face
-            for (int j = 0; j < 3; ++j) {
-                if (vtIdx[j] >= 0 && vtIdx[j] < static_cast<int>(texcoords.size())) {
-                    mesh.setTexcoord(h, texcoords[vtIdx[j]]);
+                // Set texcoords for each halfedge of the face
+                for (int j = 0; j < 3; ++j) {
+                    if (vtIdx[j] >= 0 && vtIdx[j] < static_cast<int>(texcoords.size())) {
+                        mesh.setTexcoord(h, texcoords[vtIdx[j]]);
+                    }
+                    h = sm.next(h);
                 }
-                h = sm.next(h);
+            }
+
+            // Set material index
+            if (hasMaterials) {
+                mesh.setFaceMaterial(f, faceMaterialIndices[i]);
             }
         }
     }
@@ -231,6 +263,9 @@ bool MeshIO::loadOBJ(const std::string& filename, Mesh& mesh) {
 
     if (hasTexcoords) {
         std::cout << "Loaded " << texcoords.size() << " texture coordinates\n";
+    }
+    if (hasMaterials) {
+        std::cout << "Loaded " << materialNames.size() << " materials\n";
     }
 
     postLoad(mesh, filename);
@@ -255,32 +290,45 @@ bool MeshIO::saveOBJ(const std::string& filename, const Mesh& mesh) {
         std::string newMtlName = baseName + ".mtl";
         fs::path dstMtl = outPath.parent_path() / newMtlName;
 
-        // Copy MTL file
+        // Check if source and destination are the same (e.g., baked texture MTL)
+        bool sameFile = false;
         try {
-            fs::copy_file(srcMtl, dstMtl, fs::copy_options::overwrite_existing);
+            sameFile = fs::equivalent(srcMtl, dstMtl);
+        } catch (...) {
+            sameFile = (srcMtl == dstMtl);
+        }
 
-            // Copy referenced texture files
-            std::ifstream mtlIn(mesh.mtlFile);
-            std::string line;
-            while (std::getline(mtlIn, line)) {
-                if (line.find("map_Kd") != std::string::npos ||
-                    line.find("map_Ka") != std::string::npos ||
-                    line.find("map_Ks") != std::string::npos) {
-                    std::istringstream iss(line);
-                    std::string prefix, texFile;
-                    iss >> prefix >> texFile;
-                    if (!texFile.empty()) {
-                        fs::path srcTex = srcMtl.parent_path() / texFile;
-                        fs::path dstTex = outPath.parent_path() / texFile;
-                        if (fs::exists(srcTex) && srcTex != dstTex) {
-                            fs::copy_file(srcTex, dstTex, fs::copy_options::overwrite_existing);
+        if (sameFile) {
+            // MTL file already in place, just write reference
+            output << "mtllib " << newMtlName << "\n";
+        } else {
+            // Copy MTL file
+            try {
+                fs::copy_file(srcMtl, dstMtl, fs::copy_options::overwrite_existing);
+
+                // Copy referenced texture files
+                std::ifstream mtlIn(mesh.mtlFile);
+                std::string line;
+                while (std::getline(mtlIn, line)) {
+                    if (line.find("map_Kd") != std::string::npos ||
+                        line.find("map_Ka") != std::string::npos ||
+                        line.find("map_Ks") != std::string::npos) {
+                        std::istringstream iss(line);
+                        std::string prefix, texFile;
+                        iss >> prefix >> texFile;
+                        if (!texFile.empty()) {
+                            fs::path srcTex = srcMtl.parent_path() / texFile;
+                            fs::path dstTex = outPath.parent_path() / texFile;
+                            if (fs::exists(srcTex) && srcTex != dstTex) {
+                                fs::copy_file(srcTex, dstTex, fs::copy_options::overwrite_existing);
+                            }
                         }
                     }
                 }
+                output << "mtllib " << newMtlName << "\n";
+            } catch (const std::exception& e) {
+                std::cerr << "Warning: Could not copy MTL file: " << e.what() << "\n";
             }
-            output << "mtllib " << newMtlName << "\n";
-        } catch (const std::exception& e) {
-            std::cerr << "Warning: Could not copy MTL file: " << e.what() << "\n";
         }
     }
 
@@ -343,9 +391,47 @@ bool MeshIO::saveOBJ(const std::string& filename, const Mesh& mesh) {
         }
     }
 
-    // Write faces
+    // Write faces (grouped by material if multi-material)
     output << "\n# Faces\n";
-    if (mesh.hasTexcoords()) {
+
+    if (mesh.hasMaterials()) {
+        // Group faces by material
+        const auto& materialNames = mesh.getMaterialNames();
+        int numMaterials = static_cast<int>(materialNames.size());
+
+        // Create face lists per material
+        std::vector<std::vector<face_descriptor>> facesByMaterial(numMaterials);
+        for (face_descriptor f : sm.faces()) {
+            int matIdx = mesh.faceMaterial(f);
+            if (matIdx >= 0 && matIdx < numMaterials) {
+                facesByMaterial[matIdx].push_back(f);
+            } else {
+                facesByMaterial[0].push_back(f);  // Default to first material
+            }
+        }
+
+        // Write faces grouped by material
+        for (int matIdx = 0; matIdx < numMaterials; ++matIdx) {
+            if (facesByMaterial[matIdx].empty()) continue;
+
+            output << "usemtl " << materialNames[matIdx] << "\n";
+
+            for (face_descriptor f : facesByMaterial[matIdx]) {
+                halfedge_descriptor h = sm.halfedge(f);
+                output << "f";
+                for (int i = 0; i < 3; ++i) {
+                    vertex_descriptor v = sm.target(h);
+                    if (mesh.hasTexcoords()) {
+                        output << " " << vertexIndex[v] << "/" << texcoordIndex[h];
+                    } else {
+                        output << " " << vertexIndex[v];
+                    }
+                    h = sm.next(h);
+                }
+                output << "\n";
+            }
+        }
+    } else if (mesh.hasTexcoords()) {
         for (face_descriptor f : sm.faces()) {
             halfedge_descriptor h = sm.halfedge(f);
             output << "f";

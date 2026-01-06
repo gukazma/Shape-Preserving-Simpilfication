@@ -32,6 +32,7 @@ public:
     using FaceNormalMap = CGALMesh::Property_map<face_descriptor, Vector_3>;
     using EdgeConstraintMap = CGALMesh::Property_map<edge_descriptor, bool>;
     using HalfedgeTexcoordMap = CGALMesh::Property_map<halfedge_descriptor, Point_2>;
+    using FaceMaterialMap = CGALMesh::Property_map<face_descriptor, int>;  // Material index per face
 
 public:
     Mesh() = default;
@@ -129,6 +130,23 @@ public:
     void setTexcoord(halfedge_descriptor h, const Point_2& uv) { halfedgeTexcoordMap_[h] = uv; }
     HalfedgeTexcoordMap& getTexcoordMap() { return halfedgeTexcoordMap_; }
 
+    // Material index (per face) for multi-texture support
+    bool hasMaterials() const { return hasMaterials_; }
+    int faceMaterial(face_descriptor f) const { return hasMaterials_ ? faceMaterialMap_[f] : 0; }
+    void setFaceMaterial(face_descriptor f, int matIdx) { faceMaterialMap_[f] = matIdx; }
+    FaceMaterialMap& getFaceMaterialMap() { return faceMaterialMap_; }
+    const std::vector<std::string>& getMaterialNames() const { return materialNames_; }
+    void setMaterialNames(const std::vector<std::string>& names) { materialNames_ = names; }
+    void initMaterialMap() {
+        auto [fmat, fmat_created] = cgal_mesh.add_property_map<face_descriptor, int>("f:material", 0);
+        faceMaterialMap_ = fmat;
+        hasMaterials_ = true;
+    }
+    void clearMaterials() {
+        materialNames_.clear();
+        hasMaterials_ = false;
+    }
+
     // Get vertex weight based on region count
     double vertexWeight(vertex_descriptor v) const {
         return getAdaptiveWeight(vertexRegionCountMap_[v]);
@@ -194,7 +212,9 @@ public:
         boundingBox = BoundingBox();
         name.clear();
         mtlFile.clear();
+        materialNames_.clear();
         hasTexcoords_ = false;
+        hasMaterials_ = false;
     }
 
     void printStats() const {
@@ -230,7 +250,10 @@ private:
     FaceNormalMap faceNormalMap_;
     EdgeConstraintMap edgeConstraintMap_;
     HalfedgeTexcoordMap halfedgeTexcoordMap_;
+    FaceMaterialMap faceMaterialMap_;
+    std::vector<std::string> materialNames_;
     bool hasTexcoords_ = false;
+    bool hasMaterials_ = false;
 };
 
 } // namespace sps
